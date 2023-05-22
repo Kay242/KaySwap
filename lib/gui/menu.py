@@ -166,10 +166,10 @@ class FileMenu(tk.Menu):  # pylint:disable=too-many-ancestors
                 kwargs = dict(filename=filename)
             else:
                 load_func = self._config.tasks.load
-                lbl = f"{command} Task"
+                lbl = "{} Task".format(command)
                 kwargs = dict(filename=filename, current_tab=False)
             self.recent_menu.add_command(
-                label=f"{filename} ({lbl.title()})",
+                label="{} ({})".format(filename, lbl.title()),
                 command=lambda kw=kwargs, fn=load_func: fn(**kw))
         if removed_files:
             for recent_item in removed_files:
@@ -188,7 +188,7 @@ class FileMenu(tk.Menu):  # pylint:disable=too-many-ancestors
     def clear_recent_files(serializer, menu_file):
         """ Creates or clears recent file list """
         logger.debug("clearing recent files list: '%s'", menu_file)
-        serializer.save(menu_file, [])
+        serializer.save(menu_file, list())
 
     def refresh_recent_menu(self):
         """ Refresh recent menu on save/load of files """
@@ -263,16 +263,14 @@ class HelpMenu(tk.Menu):  # pylint:disable=too-many-ancestors
             error then `None` is returned
         """
         gitcmd = "git branch -a"
-        with Popen(gitcmd, shell=True, stdout=PIPE, stderr=STDOUT, cwd=_WORKING_DIR) as cmd:
-            stdout, _ = cmd.communicate()
-            retcode = cmd.poll()
+        cmd = Popen(gitcmd, shell=True, stdout=PIPE, stderr=STDOUT, cwd=_WORKING_DIR)
+        stdout, _ = cmd.communicate()
+        retcode = cmd.poll()
         if retcode != 0:
             logger.debug("Unable to list git branches. return code: %s, message: %s",
-                         retcode,
-                         stdout.decode(locale.getpreferredencoding(),
-                                       errors="replace").strip().replace("\n", " - "))
+                         retcode, stdout.decode().strip().replace("\n", " - "))
             return None
-        return stdout.decode(locale.getpreferredencoding(), errors="replace")
+        return stdout.decode(locale.getpreferredencoding())
 
     @staticmethod
     def _filter_branches(stdout):
@@ -317,15 +315,13 @@ class HelpMenu(tk.Menu):  # pylint:disable=too-many-ancestors
             The branch to switch to
         """
         logger.info("Switching branch to '%s'...", branch)
-        gitcmd = f"git checkout {branch}"
-        with Popen(gitcmd, shell=True, stdout=PIPE, stderr=STDOUT, cwd=_WORKING_DIR) as cmd:
-            stdout, _ = cmd.communicate()
-            retcode = cmd.poll()
+        gitcmd = "git checkout {}".format(branch)
+        cmd = Popen(gitcmd, shell=True, stdout=PIPE, stderr=STDOUT, cwd=_WORKING_DIR)
+        stdout, _ = cmd.communicate()
+        retcode = cmd.poll()
         if retcode != 0:
             logger.error("Unable to switch branch. return code: %s, message: %s",
-                         retcode,
-                         stdout.decode(locale.getdefaultlocale(),
-                                       errors="replace").strip().replace("\n", " - "))
+                         retcode, stdout.decode().strip().replace("\n", " - "))
             return
         logger.info("Succesfully switched to '%s'. You may want to check for updates to make sure "
                     "that you have the latest code.", branch)
@@ -351,7 +347,7 @@ class HelpMenu(tk.Menu):  # pylint:disable=too-many-ancestors
     @staticmethod
     def clear_console():
         """ Clear the console window """
-        get_config().tk_vars.console_clear.set(True)
+        get_config().tk_vars["console_clear"].set(True)
 
     def output_sysinfo(self):
         """ Output system information to console """
@@ -362,7 +358,7 @@ class HelpMenu(tk.Menu):  # pylint:disable=too-many-ancestors
             from lib.sysinfo import sysinfo  # pylint:disable=import-outside-toplevel
             info = sysinfo
         except Exception as err:  # pylint:disable=broad-except
-            info = f"Error obtaining system info: {str(err)}"
+            info = "Error obtaining system info: {}".format(str(err))
         self.clear_console()
         logger.debug("Obtained system information: %s", info)
         print(info)
@@ -386,7 +382,7 @@ class HelpMenu(tk.Menu):  # pylint:disable=too-many-ancestors
         success = False
         if self.check_for_updates(encoding):
             success = self.do_update(encoding)
-        update_deps.main(is_gui=True)
+        update_deps.main(logger=logger)
         if success:
             logger.info("Please restart Faceswap to complete the update.")
         self.root.config(cursor="")
@@ -399,14 +395,14 @@ class HelpMenu(tk.Menu):  # pylint:disable=too-many-ancestors
         update = False
         msg = ""
         gitcmd = "git remote update && git status -uno"
-        with Popen(gitcmd, shell=True, stdout=PIPE, stderr=STDOUT, cwd=_WORKING_DIR) as cmd:
-            stdout, _ = cmd.communicate()
-            retcode = cmd.poll()
+        cmd = Popen(gitcmd, shell=True, stdout=PIPE, stderr=STDOUT, cwd=_WORKING_DIR)
+        stdout, _ = cmd.communicate()
+        retcode = cmd.poll()
         if retcode != 0:
             msg = ("Git is not installed or you are not running a cloned repo. "
                    "Unable to check for updates")
         else:
-            chk = stdout.decode(encoding, errors="replace").splitlines()
+            chk = stdout.decode(encoding).splitlines()
             for line in chk:
                 if line.lower().startswith("your branch is ahead"):
                     msg = "Your branch is ahead of the remote repo. Not updating"
@@ -431,20 +427,15 @@ class HelpMenu(tk.Menu):  # pylint:disable=too-many-ancestors
         """ Update Faceswap """
         logger.info("A new version is available. Updating...")
         gitcmd = "git pull"
-        with Popen(gitcmd,
-                   shell=True,
-                   stdout=PIPE,
-                   stderr=STDOUT,
-                   bufsize=1,
-                   cwd=_WORKING_DIR) as cmd:
-            while True:
-                output = cmd.stdout.readline().decode(encoding, errors="replace")
-                if output == "" and cmd.poll() is not None:
-                    break
-                if output:
-                    logger.debug("'%s' output: '%s'", gitcmd, output.strip())
-                    print(output.strip())
-            retcode = cmd.poll()
+        cmd = Popen(gitcmd, shell=True, stdout=PIPE, stderr=STDOUT, bufsize=1, cwd=_WORKING_DIR)
+        while True:
+            output = cmd.stdout.readline().decode(encoding)
+            if output == "" and cmd.poll() is not None:
+                break
+            if output:
+                logger.debug("'%s' output: '%s'", gitcmd, output.strip())
+                print(output.strip())
+        retcode = cmd.poll()
         logger.debug("'%s' returncode: %s", gitcmd, retcode)
         if retcode != 0:
             logger.info("An error occurred during update. return code: %s", retcode)
@@ -491,7 +482,7 @@ class TaskBar(ttk.Frame):  # pylint: disable=too-many-ancestors
         frame.pack(side=tk.LEFT, anchor=tk.W, expand=False, padx=2)
 
         for loadtype in ("load", "save", "save_as", "clear", "reload"):
-            btntype = f"{loadtype}2"
+            btntype = "{}2".format(loadtype)
             logger.debug("Adding button: '%s'", btntype)
 
             loader, kwargs = self._loader_and_kwargs(loadtype)
@@ -516,7 +507,7 @@ class TaskBar(ttk.Frame):  # pylint: disable=too-many-ancestors
             kwargs = dict(save_as=True)
         else:
             loader = btntype
-            kwargs = {}
+            kwargs = dict()
         logger.debug("btntype: %s, loader: %s, kwargs: %s", btntype, loader, kwargs)
         return loader, kwargs
 
@@ -525,7 +516,7 @@ class TaskBar(ttk.Frame):  # pylint: disable=too-many-ancestors
         frame = ttk.Frame(self._btn_frame)
         frame.pack(side=tk.LEFT, anchor=tk.W, expand=False, padx=2)
         for name in ("extract", "train", "convert"):
-            btntype = f"settings_{name}"
+            btntype = "settings_{}".format(name)
             btntype = btntype if btntype in get_images().icons else "settings"
             logger.debug("Adding button: '%s'", btntype)
             btn = ttk.Button(

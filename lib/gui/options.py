@@ -21,8 +21,8 @@ class CliOptions():
     def __init__(self):
         logger.debug("Initializing %s", self.__class__.__name__)
         self.categories = ("faceswap", "tools")
-        self.commands = {}
-        self.opts = {}
+        self.commands = dict()
+        self.opts = dict()
         self.build_options()
         logger.debug("Initialized %s", self.__class__.__name__)
 
@@ -59,12 +59,12 @@ class CliOptions():
         """ Parse the tools cli scripts for the argument classes """
         base_path = os.path.realpath(os.path.dirname(sys.argv[0]))
         tools_dir = os.path.join(base_path, "tools")
-        mod_classes = {}
+        mod_classes = dict()
         for tool_name in sorted(os.listdir(tools_dir)):
             cli_file = os.path.join(tools_dir, tool_name, "cli.py")
             if os.path.exists(cli_file):
                 mod = ".".join(("tools", tool_name, "cli"))
-                mod_classes[f"{tool_name.title()}Args"] = import_module(mod)
+                mod_classes["{}Args".format(tool_name.title())] = import_module(mod)
         return mod_classes
 
     def sort_commands(self, category, classes):
@@ -88,7 +88,7 @@ class CliOptions():
     def extract_options(self, cli_source, mod_classes):
         """ Extract the existing ArgParse Options
             into master options Dictionary """
-        subopts = {}
+        subopts = dict()
         for classname in mod_classes:
             logger.debug("Processing: (classname: '%s')", classname)
             command = self.format_command_name(classname)
@@ -172,12 +172,11 @@ class CliOptions():
                           actions.FileFullPaths,
                           actions.FilesFullPaths,
                           actions.DirOrFileFullPaths,
-                          actions.DirOrFilesFullPaths,
                           actions.SaveFileFullPaths,
                           actions.ContextFullPaths):
             return None
 
-        retval = {}
+        retval = dict()
         action_option = None
         if option.get("action_option", None) is not None:
             self.expand_action_option(option, options)
@@ -191,8 +190,6 @@ class CliOptions():
             retval["browser"] = ["save"]
         elif action == actions.DirOrFileFullPaths:
             retval["browser"] = ["folder", "load"]
-        elif action == actions.DirOrFilesFullPaths:
-            retval["browser"] = ["folder", "multi_load"]
         elif action == actions.ContextFullPaths and action_option:
             retval["browser"] = ["context"]
             retval["command"] = command
@@ -215,7 +212,7 @@ class CliOptions():
 
     def gen_command_options(self, command):
         """ Yield each option for specified command """
-        for key, val in self.opts.get(command, {}).items():
+        for key, val in self.opts[command].items():
             if not isinstance(val, dict):
                 continue
             yield key, val
@@ -256,11 +253,11 @@ class CliOptions():
 
     def get_option_values(self, command=None):
         """ Return all or single command control titles with the associated tk_var value """
-        ctl_dict = {}
+        ctl_dict = dict()
         for cmd, opts in self.opts.items():
             if command and command != cmd:
                 continue
-            cmd_dict = {}
+            cmd_dict = dict()
             for key, val in opts.items():
                 if not isinstance(val, dict):
                     continue
@@ -279,15 +276,11 @@ class CliOptions():
 
     def gen_cli_arguments(self, command):
         """ Return the generated cli arguments for the selected command """
-        output_dir = None
-        batch_mode = False
         for _, option in self.gen_command_options(command):
             optval = str(option["cpanel_option"].get())
             opt = option["opts"][0]
-            if command in ("extract", "convert") and opt == "-o":  # Output location for preview
-                output_dir = optval
-            if command == "extract" and opt == "-b":               # Check for batch mode
-                batch_mode = optval
+            if command in ("extract", "convert") and opt == "-o":
+                get_images().set_faceswap_output_path(optval)
             if optval in ("False", ""):
                 continue
             if optval == "True":
@@ -302,7 +295,3 @@ class CliOptions():
                 else:
                     opt = (opt, optval)
                 yield opt
-
-        if command in ("extract", "convert") and output_dir is not None:
-            get_images().preview_extract.set_faceswap_output_path(output_dir,
-                                                                  batch_mode=batch_mode)

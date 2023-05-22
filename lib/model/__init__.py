@@ -3,11 +3,10 @@
 
 from lib.utils import get_backend
 
-from .normalization import (AdaInstanceNormalization, GroupNormalization,  # noqa
-                            InstanceNormalization, LayerNormalization, RMSNormalization)
-from .loss import losses  # noqa
-
+from .normalization import *
 if get_backend() == "amd":
-    from . import optimizers_plaid as optimizers  # noqa
+    from . import losses_plaid as losses
+    from . import optimizers_plaid as optimizers
 else:
-    from . import optimizers_tf as optimizers  #type:ignore # noqa
+    from . import losses_tf as losses
+    from . import optimizers_tf as optimizers

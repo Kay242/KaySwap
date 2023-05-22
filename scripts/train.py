@@ -5,34 +5,18 @@ import logging
 import os
 import sys
 
+from threading import Lock
 from time import sleep
-from threading import Event
-from typing import cast, Callable, Dict, List, Optional, TYPE_CHECKING
 
 import cv2
-import numpy as np
 
-from lib.gui.utils.image import TRAININGPREVIEW
 from lib.image import read_image_meta
 from lib.keypress import KBHit
-from lib.multithreading import MultiThread, FSThread
-from lib.training import Preview, PreviewBuffer, TriggerType
-from lib.utils import (get_folder, get_image_paths,
-                       FaceswapError, _image_extensions)
+from lib.multithreading import MultiThread
+from lib.utils import (get_folder, get_image_paths, FaceswapError, _image_extensions)
 from plugins.plugin_loader import PluginLoader
 
-if sys.version_info < (3, 8):
-    from typing_extensions import Literal
-else:
-    from typing import Literal
-
-if TYPE_CHECKING:
-    import argparse
-    from plugins.train.model._base import ModelBase
-    from plugins.train.trainer._base import TrainerBase
-
-
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
 class Train():  # pylint:disable=too-few-public-methods
@@ -50,11 +34,9 @@ class Train():  # pylint:disable=too-few-public-methods
         The arguments to be passed to the training process as generated from Faceswap's command
         line arguments
     """
-    def __init__(self, arguments: "argparse.Namespace") -> None:
+    def __init__(self, arguments):
         logger.debug("Initializing %s: (args: %s", self.__class__.__name__, arguments)
         self._args = arguments
-        self._handle_deprecations()
-
         if self._args.summary:
             # If just outputting summary we don't need to initialize everything
             return
@@ -63,20 +45,18 @@ class Train():  # pylint:disable=too-few-public-methods
         self._timelapse = self._set_timelapse()
         gui_cache = os.path.join(
             os.path.realpath(os.path.dirname(sys.argv[0])), "lib", "gui", ".cache")
-        self._gui_triggers: Dict[Literal["mask", "refresh"], str] = dict(
-            mask=os.path.join(gui_cache, ".preview_mask_toggle"),
-            refresh=os.path.join(gui_cache, ".preview_trigger"))
-        self._stop: bool = False
-        self._save_now: bool = False
-        self._preview = PreviewInterface(self._args.preview)
+        self._gui_triggers = dict(update=os.path.join(gui_cache, ".preview_trigger"),
+                                  mask_toggle=os.path.join(gui_cache, ".preview_mask_toggle"))
+        self._stop = False
+        self._save_now = False
+        self._toggle_preview_mask = False
+        self._refresh_preview = False
+        self._preview_buffer = dict()
+        self._lock = Lock()
 
         logger.debug("Initialized %s", self.__class__.__name__)
 
-    def _handle_deprecations(self) -> None:
-        """ Handle the update of deprecated arguments and output warnings. """
-        return
-
-    def _get_images(self) -> Dict[Literal["a", "b"], List[str]]:
+    def _get_images(self):
         """ Check the image folders exist and contains valid extracted faces. Obtain image paths.
 
         Returns
@@ -86,10 +66,9 @@ class Train():  # pylint:disable=too-few-public-methods
             for that side.
         """
         logger.debug("Getting image paths")
-        images = {}
+        images = dict()
         for side in ("a", "b"):
-            side = cast(Literal["a", "b"], side)
-            image_dir = getattr(self._args, f"input_{side}")
+            image_dir = getattr(self._args, "input_{}".format(side))
             if not os.path.isdir(image_dir):
                 logger.error("Error: '%s' does not exist", image_dir)
                 sys.exit(1)
@@ -117,7 +96,7 @@ class Train():  # pylint:disable=too-few-public-methods
         return images
 
     @classmethod
-    def _validate_image_counts(cls, images: Dict[Literal["a", "b"], List[str]]) -> None:
+    def _validate_image_counts(cls, images):
         """ Validate that there are sufficient images to commence training without raising an
         error.
 
@@ -145,7 +124,7 @@ class Train():  # pylint:disable=too-few-public-methods
                            "Results are likely to be poor.")
             logger.warning(msg)
 
-    def _set_timelapse(self) -> Dict[Literal["input_a", "input_b", "output"], str]:
+    def _set_timelapse(self):
         """ Set time-lapse paths if requested.
 
         Returns
@@ -157,7 +136,7 @@ class Train():  # pylint:disable=too-few-public-methods
         if (not self._args.timelapse_input_a and
                 not self._args.timelapse_input_b and
                 not self._args.timelapse_output):
-            return {}
+            return None
         if (not self._args.timelapse_input_a or
                 not self._args.timelapse_input_b or
                 not self._args.timelapse_output):
@@ -168,7 +147,6 @@ class Train():  # pylint:disable=too-few-public-methods
         timelapse_output = get_folder(self._args.timelapse_output)
 
         for side in ("a", "b"):
-            side = cast(Literal["a", "b"], side)
             folder = getattr(self._args, f"timelapse_input_{side}")
             if folder is not None and not os.path.isdir(folder):
                 raise FaceswapError(f"The Timelapse path '{folder}' does not exist")
@@ -190,14 +168,13 @@ class Train():  # pylint:disable=too-few-public-methods
                 raise FaceswapError(f"All images in the Timelapse folder '{folder}' must exist in "
                                     f"the training folder '{training_folder}'")
 
-        TKey = Literal["input_a", "input_b", "output"]
-        kwargs = {cast(TKey, "input_a"): self._args.timelapse_input_a,
-                  cast(TKey, "input_b"): self._args.timelapse_input_b,
-                  cast(TKey, "output"): timelapse_output}
+        kwargs = {"input_a": self._args.timelapse_input_a,
+                  "input_b": self._args.timelapse_input_b,
+                  "output": timelapse_output}
         logger.debug("Timelapse enabled: %s", kwargs)
         return kwargs
 
-    def process(self) -> None:
+    def process(self):
         """ The entry point for triggering the Training Process.
 
         Should only be called from  :class:`lib.cli.launcher.ScriptExecutor`
@@ -213,7 +190,7 @@ class Train():  # pylint:disable=too-few-public-methods
         self._end_thread(thread, err)
         logger.debug("Completed Training Process")
 
-    def _start_thread(self) -> MultiThread:
+    def _start_thread(self):
         """ Put the :func:`_training` into a background thread so we can keep control.
 
         Returns
@@ -227,7 +204,7 @@ class Train():  # pylint:disable=too-few-public-methods
         logger.debug("Launched Trainer thread")
         return thread
 
-    def _end_thread(self, thread: MultiThread, err: bool) -> None:
+    def _end_thread(self, thread, err):
         """ Output message and join thread back to main on termination.
 
         Parameters
@@ -254,10 +231,10 @@ class Train():  # pylint:disable=too-few-public-methods
         sys.stdout.flush()
         logger.debug("Ended training thread")
 
-    def _training(self) -> None:
+    def _training(self):
         """ The training process to be run inside a thread. """
         try:
-            sleep(0.5)  # Let preview instructions flush out to logger
+            sleep(1)  # Let preview instructions flush out to logger
             logger.debug("Commencing Training")
             logger.info("Loading data, this may take a while...")
             model = self._load_model()
@@ -266,7 +243,7 @@ class Train():  # pylint:disable=too-few-public-methods
         except KeyboardInterrupt:
             try:
                 logger.debug("Keyboard Interrupt Caught. Saving Weights and exiting")
-                model.save(is_exit=True)
+                model.save()
                 trainer.clear_tensorboard()
             except KeyboardInterrupt:
                 logger.info("Saving model weights has been cancelled!")
@@ -274,7 +251,7 @@ class Train():  # pylint:disable=too-few-public-methods
         except Exception as err:
             raise err
 
-    def _load_model(self) -> "ModelBase":
+    def _load_model(self):
         """ Load the model requested for training.
 
         Returns
@@ -284,7 +261,7 @@ class Train():  # pylint:disable=too-few-public-methods
         """
         logger.debug("Loading Model")
         model_dir = get_folder(self._args.model_dir)
-        model: "ModelBase" = PluginLoader.get_model(self._args.trainer)(
+        model = PluginLoader.get_model(self._args.trainer)(
             model_dir,
             self._args,
             predict=False)
@@ -292,7 +269,7 @@ class Train():  # pylint:disable=too-few-public-methods
         logger.debug("Loaded Model")
         return model
 
-    def _load_trainer(self, model: "ModelBase") -> "TrainerBase":
+    def _load_trainer(self, model):
         """ Load the trainer requested for training.
 
         Parameters
@@ -306,15 +283,15 @@ class Train():  # pylint:disable=too-few-public-methods
             The requested model trainer plugin
         """
         logger.debug("Loading Trainer")
-        base = PluginLoader.get_trainer(model.trainer)
-        trainer: "TrainerBase" = base(model,
-                                      self._images,
-                                      self._args.batch_size,
-                                      self._args.configfile)
+        trainer = PluginLoader.get_trainer(model.trainer)
+        trainer = trainer(model,
+                          self._images,
+                          self._args.batch_size,
+                          self._args.configfile)
         logger.debug("Loaded Trainer")
         return trainer
 
-    def _run_training_cycle(self, model: "ModelBase", trainer: "TrainerBase") -> None:
+    def _run_training_cycle(self, model, trainer):
         """ Perform the training cycle.
 
         Handles the background training, updating previews/time-lapse on each save interval,
@@ -328,130 +305,79 @@ class Train():  # pylint:disable=too-few-public-methods
             The requested model trainer plugin
         """
         logger.debug("Running Training Cycle")
-        update_preview_images = False
         if self._args.write_image or self._args.redirect_gui or self._args.preview:
-            display_func: Optional[Callable] = self._show
+            display_func = self._show
         else:
             display_func = None
 
         for iteration in range(1, self._args.iterations + 1):
-            logger.trace("Training iteration: %s", iteration)  # type:ignore
+            logger.trace("Training iteration: %s", iteration)
             save_iteration = iteration % self._args.save_interval == 0 or iteration == 1
-            gui_triggers = self._process_gui_triggers()
 
-            if self._preview.should_toggle_mask or gui_triggers["mask"]:
+            if self._toggle_preview_mask:
                 trainer.toggle_mask()
-                update_preview_images = True
+                self._toggle_preview_mask = False
+                self._refresh_preview = True
 
-            if self._preview.should_refresh or gui_triggers["refresh"] or update_preview_images:
+            if save_iteration or self._save_now or self._refresh_preview:
                 viewer = display_func
-                update_preview_images = False
             else:
                 viewer = None
-
-            timelapse = self._timelapse if save_iteration else {}
+            timelapse = self._timelapse if save_iteration else None
             trainer.train_one_step(viewer, timelapse)
-
-            if viewer is not None and not save_iteration:
-                # Spammy but required by GUI to know to update window
-                print("")
-                logger.info("[Preview Updated]")
-
             if self._stop:
                 logger.debug("Stop received. Terminating")
                 break
 
-            if save_iteration or self._save_now:
-                logger.debug("Saving (save_iterations: %s, save_now: %s) Iteration: "
-                             "(iteration: %s)", save_iteration, self._save_now, iteration)
-                model.save(is_exit=False)
-                self._save_now = False
-                update_preview_images = True
+            if self._refresh_preview and viewer is not None:
+                if self._args.redirect_gui:  # Remove any gui trigger files following an update
+                    print("\n")
+                    logger.info("[Preview Updated]")
+                self._refresh_preview = False
 
+            if save_iteration:
+                logger.debug("Save Iteration: (iteration: %s", iteration)
+                model.save()
+            elif self._save_now:
+                logger.debug("Save Requested: (iteration: %s", iteration)
+                model.save()
+                self._save_now = False
         logger.debug("Training cycle complete")
-        model.save(is_exit=True)
+        model.save()
         trainer.clear_tensorboard()
         self._stop = True
 
-    def _output_startup_info(self) -> None:
-        """ Print the startup information to the console. """
-        logger.debug("Launching Monitor")
-        logger.info("===================================================")
-        logger.info("  Starting")
-        if self._args.preview:
-            logger.info("  Using live preview")
-        if sys.stdout.isatty():
-            logger.info("  Press '%s' to save and quit",
-                        "Stop" if self._args.redirect_gui or self._args.colab else "ENTER")
-        if not self._args.redirect_gui and not self._args.colab and sys.stdout.isatty():
-            logger.info("  Press 'S' to save model weights immediately")
-        logger.info("===================================================")
-
-    def _check_keypress(self, keypress: KBHit) -> bool:
-        """ Check if a keypress has been detected.
-
-        Parameters
-        ----------
-        keypress: :class:`lib.keypress.KBHit`
-            The keypress monitor
-
-        Returns
-        -------
-        bool
-            ``True`` if an exit keypress has been detected otherwise ``False``
-        """
-        retval = False
-        if keypress.kbhit():
-            console_key = keypress.getch()
-            if console_key in ("\n", "\r"):
-                logger.debug("Exit requested")
-                retval = True
-            if console_key in ("s", "S"):
-                logger.info("Save requested")
-                self._save_now = True
-        return retval
-
-    def _process_gui_triggers(self) -> Dict[Literal["mask", "refresh"], bool]:
-        """ Check whether a file drop has occurred from the GUI to manually update the preview.
-
-        Returns
-        -------
-        dict
-            The trigger name as key and boolean as value
-        """
-        retval: Dict[Literal["mask", "refresh"], bool] = {key: False for key in self._gui_triggers}
-        if not self._args.redirect_gui:
-            return retval
-
-        for trigger, filename in self._gui_triggers.items():
-            if os.path.isfile(filename):
-                logger.debug("GUI Trigger received for: '%s'", trigger)
-                retval[trigger] = True
-                logger.debug("Removing gui trigger file: %s", filename)
-                os.remove(filename)
-                if trigger == "refresh":
-                    print("")  # Let log print on different line from loss output
-                    logger.info("Refresh preview requested...")
-        return retval
-
-    def _monitor(self, thread: MultiThread) -> bool:
+    def _monitor(self, thread):
         """ Monitor the background :func:`_training` thread for key presses and errors.
-
-        Parameters
-        ----------
-        thread: :class:~`lib.multithreading.MultiThread`
-            The thread containing the training loop
 
         Returns
         -------
         bool
             ``True`` if there has been an error in the background thread otherwise ``False``
         """
-        self._output_startup_info()
+        logger.debug("Launching Monitor")
+        logger.info("===================================================")
+        logger.info("  Starting")
+        if self._args.preview:
+            logger.info("  Using live preview")
+        logger.info("  Press '%s' to save and quit",
+                    "Stop" if self._args.redirect_gui or self._args.colab else "ENTER")
+        if not self._args.redirect_gui and not self._args.colab:
+            logger.info("  Press 'S' to save model weights immediately")
+        logger.info("===================================================")
+
         keypress = KBHit(is_gui=self._args.redirect_gui)
         err = False
         while True:
             try:
+                if self._args.preview:
+                    with self._lock:
+                        for name, image in self._preview_buffer.items():
+                            cv2.imshow(name, image)  # pylint: disable=no-member
+                    cv_key = cv2.waitKey(1000)  # pylint: disable=no-member
+                else:
+                    cv_key = None
+
                 if thread.has_error:
                     logger.debug("Thread error detected")
                     err = True
@@ -461,25 +387,87 @@ class Train():  # pylint:disable=too-few-public-methods
                     break
 
                 # Preview Monitor
-                if self._preview.should_quit:
+                if not self._preview_monitor(cv_key):
                     break
-                if self._preview.should_save:
-                    self._save_now = True
 
                 # Console Monitor
-                if self._check_keypress(keypress):
-                    break  # Exit requested
+                if keypress.kbhit():
+                    console_key = keypress.getch()
+                    if console_key in ("\n", "\r"):
+                        logger.debug("Exit requested")
+                        break
+                    if console_key in ("s", "S"):
+                        logger.info("Save requested")
+                        self._save_now = True
+
+                # GUI Preview trigger update monitor
+                self._process_gui_triggers()
 
                 sleep(1)
             except KeyboardInterrupt:
                 logger.debug("Keyboard Interrupt received")
                 break
-        self._preview.shutdown()
         keypress.set_normal_term()
         logger.debug("Closed Monitor")
         return err
 
-    def _show(self, image: np.ndarray, name: str = "") -> None:
+    def _preview_monitor(self, key_press):
+        """ Monitors keyboard presses on the pop-up OpenCV Preview Window.
+
+        Parameters
+        ----------
+        key_press: str
+            The key press received from OpenCV or ``None`` if no press received
+
+        Returns
+        -------
+        bool
+            ``True`` if the process should continue training. ``False`` if an exit has been
+            requested and process should terminate
+        """
+        if not self._args.preview:
+            return True
+
+        if key_press == ord("\n") or key_press == ord("\r"):
+            logger.debug("Exit requested")
+            return False
+
+        if key_press == ord("s"):
+            print("\n")
+            logger.info("Save requested")
+            self._save_now = True
+        if key_press == ord("r"):
+            print("\n")
+            logger.info("Refresh preview requested")
+            self._refresh_preview = True
+        if key_press == ord("m"):
+            print("\n")
+            logger.verbose("Toggle mask display requested")
+            self._toggle_preview_mask = True
+
+        return True
+
+    def _process_gui_triggers(self):
+        """ Check whether a file drop has occurred from the GUI to manually update the preview. """
+        if not self._args.redirect_gui:
+            return
+
+        parent_flags = dict(mask_toggle="_toggle_preview_mask", update="_refresh_preview")
+        for trigger in ("mask_toggle", "update"):
+            filename = self._gui_triggers[trigger]
+            if os.path.isfile(filename):
+                logger.debug("GUI Trigger received for: '%s'", trigger)
+
+                logger.debug("Removing gui trigger file: %s", filename)
+                os.remove(filename)
+
+                if trigger == "update":
+                    print("\n")
+                    logger.info("Refresh preview requested")
+
+                setattr(self, parent_flags[trigger], True)
+
+    def _show(self, image, name=""):
         """ Generate the preview and write preview file output.
 
         Handles the output and display of preview images.
@@ -490,132 +478,30 @@ class Train():  # pylint:disable=too-few-public-methods
             The preview image to be displayed and/or written out
         name: str, optional
             The name of the image for saving or display purposes. If an empty string is passed
-            then it will automatically be named. Default: ""
+            then it will automatically be names. Default: ""
         """
         logger.debug("Updating preview: (name: %s)", name)
         try:
             scriptpath = os.path.realpath(os.path.dirname(sys.argv[0]))
             if self._args.write_image:
                 logger.debug("Saving preview to disk")
-                img = "training_preview.png"
+                img = "training_preview.jpg"
                 imgfile = os.path.join(scriptpath, img)
                 cv2.imwrite(imgfile, image)  # pylint: disable=no-member
                 logger.debug("Saved preview to: '%s'", img)
             if self._args.redirect_gui:
                 logger.debug("Generating preview for GUI")
-                img = TRAININGPREVIEW
-                imgfile = os.path.join(scriptpath, "lib", "gui", ".cache", "preview", img)
+                img = ".gui_training_preview.jpg"
+                imgfile = os.path.join(scriptpath, "lib", "gui",
+                                       ".cache", "preview", img)
                 cv2.imwrite(imgfile, image)  # pylint: disable=no-member
-                logger.debug("Generated preview for GUI: '%s'", imgfile)
+                logger.debug("Generated preview for GUI: '%s'", img)
             if self._args.preview:
                 logger.debug("Generating preview for display: '%s'", name)
-                self._preview.buffer.add_image(name, image)
+                with self._lock:
+                    self._preview_buffer[name] = image
                 logger.debug("Generated preview for display: '%s'", name)
         except Exception as err:
             logging.error("could not preview sample")
             raise err
         logger.debug("Updated preview: (name: %s)", name)
-
-
-class PreviewInterface():
-    """ Run the preview window in a thread and interface with it
-
-    Parameters
-    ----------
-    use_preview: bool
-        ``True`` if pop-up preview window has been requested otherwise ``False``
-    """
-    def __init__(self, use_preview: bool) -> None:
-        self._active = use_preview
-        self._triggers: TriggerType = dict(toggle_mask=Event(),
-                                           refresh=Event(),
-                                           save=Event(),
-                                           quit=Event(),
-                                           shutdown=Event())
-        self._buffer = PreviewBuffer()
-        self._thread = self._launch_thread()
-
-    @property
-    def buffer(self) -> PreviewBuffer:
-        """ :class:`PreviewBuffer`: The thread save preview image object """
-        return self._buffer
-
-    @property
-    def should_toggle_mask(self) -> bool:
-        """ bool: Check whether the mask should be toggled and return the value. If ``True`` is
-        returned then resets mask toggle back to ``False`` """
-        if not self._active:
-            return False
-        retval = self._triggers["toggle_mask"].is_set()
-        if retval:
-            logger.debug("Sending toggle mask")
-            self._triggers["toggle_mask"].clear()
-        return retval
-
-    @property
-    def should_refresh(self) -> bool:
-        """ bool: Check whether the preview should be updated and return the value. If ``True`` is
-        returned then resets the refresh trigger back to ``False`` """
-        if not self._active:
-            return False
-        retval = self._triggers["refresh"].is_set()
-        if retval:
-            logger.debug("Sending should refresh")
-            self._triggers["refresh"].clear()
-        return retval
-
-    @property
-    def should_save(self) -> bool:
-        """ bool: Check whether a save request has been made. If ``True`` is returned then save
-        trigger is set back to ``False`` """
-        if not self._active:
-            return False
-        retval = self._triggers["save"].is_set()
-        if retval:
-            logger.debug("Sending should save")
-            self._triggers["save"].clear()
-        return retval
-
-    @property
-    def should_quit(self) -> bool:
-        """ bool: Check whether an exit request has been made. ``True`` if an exit request has
-        been made otherwise ``False``.
-
-        Raises
-        ------
-        Error
-            Re-raises any error within the preview thread
-         """
-        if self._thread is None:
-            return False
-
-        self._thread.check_and_raise_error()
-
-        retval = self._triggers["quit"].is_set()
-        if retval:
-            logger.debug("Sending should stop")
-        return retval
-
-    def _launch_thread(self) -> Optional[FSThread]:
-        """ Launch the preview viewer in it's own thread if preview has been selected
-
-        Returns
-        -------
-        :class:`lib.multithreading.FSThread` or ``None``
-            The thread that holds the preview viewer if preview is selected otherwise ``None``
-        """
-        if not self._active:
-            return None
-        thread = FSThread(target=Preview,
-                          name="preview",
-                          args=(self._buffer, ),
-                          kwargs=dict(triggers=self._triggers))
-        thread.start()
-        return thread
-
-    def shutdown(self) -> None:
-        """ Send a signal to shutdown the preview window. """
-        if not self._active:
-            return
-        logger.debug("Sending shutdown to preview viewer")
-        self._triggers["shutdown"].set()

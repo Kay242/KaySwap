@@ -9,7 +9,6 @@ import os
 import sys
 import tkinter as tk
 from tkinter import ttk
-from typing import Dict, TYPE_CHECKING
 from importlib import import_module
 
 from lib.serializer import get_serializer
@@ -18,14 +17,15 @@ from .control_helper import ControlPanel, ControlPanelOption
 from .custom_widgets import Tooltip
 from .utils import FileHandler, get_config, get_images, PATHCACHE
 
-if TYPE_CHECKING:
-    from lib.config import FaceswapConfig
-
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 # LOCALES
 _LANG = gettext.translation("gui.tooltips", localedir="locales", fallback=True)
 _ = _LANG.gettext
+
+_POPUP = []
+_CONFIG_FILES = []
+_CONFIGS = dict()
 
 
 class _State():
@@ -34,7 +34,7 @@ class _State():
         self._popup = None
         # The GUI Config cannot be scanned until GUI is launched, so this is populated
         # on the first call to load the settings
-        self._configs = {}
+        self._configs = dict()
 
     def open_popup(self, name=None):
         """ Launch the popup, ensuring only one instance is ever open
@@ -45,7 +45,8 @@ class _State():
             The name of the configuration file. Used for selecting the correct section if required.
             Set to ``None`` if no initial section should be selected. Default: ``None``
         """
-        self._scan_for_configs()
+        if not self._configs:
+            self._scan_for_configs()
         logger.debug("name: %s", name)
         if self._popup is not None:
             logger.debug("Restoring existing popup")
@@ -161,7 +162,7 @@ class _ConfigurePlugins(tk.Toplevel):
         width = int(600 * scaling_factor)
         height = int(536 * scaling_factor)
         logger.debug("Pop up Geometry: %sx%s, %s+%s", width, height, pos_x, pos_y)
-        self.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
+        self.geometry("{}x{}+{}+{}".format(width, height, pos_x, pos_y))
 
     def _build_header(self):
         """ Build the main header text and separator. """
@@ -242,7 +243,7 @@ class _ConfigurePlugins(tk.Toplevel):
         selection = self._tree.focus()
         section = selection.split("|")[0]
         subsections = selection.split("|")[1:] if "|" in selection else []
-        self._tk_vars["header"].set(f"{section.title()} Settings")
+        self._tk_vars["header"].set("{} Settings".format(section.title()))
         self._opts_frame.select_options(section, subsections)
 
 
@@ -296,7 +297,7 @@ class _Tree(ttk.Frame):  # pylint:disable=too-many-ancestors
         style = ttk.Style()
 
         # Fix a bug in Tree-view that doesn't show alternate foreground on selection
-        fix_map = lambda o: [elm for elm in style.map("Treeview", query_opt=o)  # noqa[E731]  # pylint:disable=C3001
+        fix_map = lambda o: [elm for elm in style.map("Treeview", query_opt=o)  # noqa
                              if elm[:2] != ("!disabled", "!selected")]
 
         # Remove the Borders
@@ -335,7 +336,7 @@ class _Tree(ttk.Frame):  # pylint:disable=too-many-ancestors
         categories += [x for x in ordered if x not in categories]
 
         for cat in categories:
-            img = get_images().icons.get(f"settings_{cat}", "")
+            img = get_images().icons.get("settings_{}".format(cat), "")
             text = cat.replace("_", " ").title()
             text = " " + text if img else text
             is_open = tk.TRUE if name is None or name == cat else tk.FALSE
@@ -371,14 +372,14 @@ class _Tree(ttk.Frame):  # pylint:disable=too-many-ancestors
             if section[-1] == "global":  # Global categories get escalated to parent
                 continue
             sect = section[0]
-            section_id = f"{category}|{sect}"
+            section_id = "{}|{}".format(category, sect)
             if sect not in seen:
                 seen.add(sect)
                 text = sect.replace("_", " ").title()
                 tree.insert(category, "end", section_id, text=text, open=is_open, tags="section")
             if len(section) == 2:
                 opt = section[-1]
-                opt_id = f"{section_id}|{opt}"
+                opt_id = "{}|{}".format(section_id, opt)
                 opt_text = opt.replace("_", " ").title()
                 tree.insert(section_id, "end", opt_id, text=opt_text, open=is_open, tags="option")
 
@@ -402,11 +403,11 @@ class DisplayArea(ttk.Frame):  # pylint:disable=too-many-ancestors
     """
     def __init__(self, top_level, parent, configurations, tree, theme):
         super().__init__(parent)
-        self._configs: Dict[str, "FaceswapConfig"] = configurations
+        self._configs = configurations
         self._theme = theme
         self._tree = tree
-        self._vars = {}
-        self._cache = {}
+        self._vars = dict()
+        self._cache = dict()
         self._config_cpanel_dict = self._get_config()
         self._displayed_frame = None
         self._displayed_key = None
@@ -435,36 +436,38 @@ class DisplayArea(ttk.Frame):  # pylint:disable=too-many-ancestors
             objects
         """
         logger.debug("Formatting Config for GUI")
-        retval = {}
+        retval = dict()
         for plugin, conf in self._configs.items():
             for section in conf.config.sections():
                 conf.section = section
                 category = section.split(".")[0]
                 sect = section.split(".")[-1]
                 # Elevate global to root
-                key = plugin if sect == "global" else f"{plugin}|{category}|{sect}"
+                key = plugin if sect == "global" else "{}|{}|{}".format(plugin, category, sect)
                 retval[key] = dict(helptext=None, options=OrderedDict())
 
-                retval[key]["helptext"] = conf.defaults[section].helptext
-                for option, params in conf.defaults[section].items.items():
+                for option, params in conf.defaults[section].items():
+                    if option == "helptext":
+                        retval[key]["helptext"] = params
+                        continue
                     initial_value = conf.config_dict[option]
                     initial_value = "none" if initial_value is None else initial_value
-                    if params.datatype == list and isinstance(initial_value, list):
+                    if params["type"] == list and isinstance(initial_value, list):
                         # Split multi-select lists into space separated strings for tk variables
                         initial_value = " ".join(initial_value)
 
                     retval[key]["options"][option] = ControlPanelOption(
                         title=option,
-                        dtype=params.datatype,
-                        group=params.group,
-                        default=params.default,
+                        dtype=params["type"],
+                        group=params["group"],
+                        default=params["default"],
                         initial_value=initial_value,
-                        choices=params.choices,
-                        is_radio=params.gui_radio,
-                        is_multi_option=params.datatype == list,
-                        rounding=params.rounding,
-                        min_max=params.min_max,
-                        helptext=params.helptext)
+                        choices=params["choices"],
+                        is_radio=params["gui_radio"],
+                        is_multi_option=params["type"] == list,
+                        rounding=params["rounding"],
+                        min_max=params["min_max"],
+                        helptext=params["helptext"])
         logger.debug("Formatted Config for GUI: %s", retval)
         return retval
 
@@ -581,8 +584,8 @@ class DisplayArea(ttk.Frame):  # pylint:disable=too-many-ancestors
                             foreground=self._theme["link_color"],
                             cursor="hand2")
             lbl.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 5))
-            bind = f"{key}|{link}"
-            lbl.bind("<Button-1>", lambda e, x=bind: self._link_callback(x))
+            bind = "{}|{}".format(key, link)
+            lbl.bind("<Button-1>", lambda e, l=bind: self._link_callback(l))
 
         return frame
 
@@ -630,59 +633,6 @@ class DisplayArea(ttk.Frame):  # pylint:disable=too-many-ancestors
             item.set(item.default)
         logger.debug("Reset config")
 
-    def _get_new_config(self,
-                        page_only: bool,
-                        config: "FaceswapConfig",
-                        category: str,
-                        lookup: str) -> ConfigParser:
-        """ Obtain a new configuration file for saving
-
-        Parameters
-        ----------
-        page_only: bool
-            ``True`` saves just the currently selected page's options, ``False`` saves all the
-            plugins options within the currently selected config.
-        config: :class:`~lib.config.FaceswapConfig`
-            The original config that is to be addressed
-        category: str
-            The configuration category to update
-        lookup: str
-            The section of the configuration to update
-
-        Returns
-        -------
-        :class:`configparse.ConfigParser`
-            The newly created configuration object for saving
-        """
-        new_config = ConfigParser(allow_no_value=True)
-        for section_name, section in config.defaults.items():
-            logger.debug("Adding section: '%s')", section_name)
-            config.insert_config_section(section_name, section.helptext, config=new_config)
-            for item, options in section.items.items():
-                if item == "helptext":
-                    continue
-                if page_only and section_name != lookup:
-                    # Keep existing values for pages we are not updating
-                    new_opt = config.get(section_name, item)
-                    logger.debug("Retain existing value '%s' for %s",
-                                 new_opt, ".".join([section_name, item]))
-                else:
-                    # Get currently selected value
-                    key = category
-                    if section_name != "global":
-                        key += f"|{section_name.replace('.', '|')}"
-                    new_opt = self._config_cpanel_dict[key]["options"][item].get()
-                    logger.debug("Updating value to '%s' for %s",
-                                 new_opt, ".".join([section_name, item]))
-                helptext = config.format_help(options.helptext, is_section=False)
-                new_config.set(section_name, helptext)
-                if options.datatype == list:  # Comma separated multi select options
-                    assert isinstance(new_opt, (list, str))
-                    new_opt = ", ".join(new_opt if isinstance(new_opt, list) else new_opt.split())
-                new_config.set(section_name, item, str(new_opt))
-
-        return new_config
-
     def save(self, page_only=False):
         """ Save the configuration file to disk.
 
@@ -697,6 +647,7 @@ class DisplayArea(ttk.Frame):  # pylint:disable=too-many-ancestors
         category = selection.split("|")[0]
         config = self._configs[category]
         # Create a new config to pull through any defaults change
+        new_config = ConfigParser(allow_no_value=True)
 
         if "|" in selection:
             lookup = ".".join(selection.split("|")[1:])
@@ -707,12 +658,36 @@ class DisplayArea(ttk.Frame):  # pylint:disable=too-many-ancestors
             logger.info("No settings to save for the current page")
             return
 
-        config.config = self._get_new_config(page_only, config, category, lookup)
+        for section, items in config.defaults.items():
+            logger.debug("Adding section: '%s')", section)
+            config.insert_config_section(section, items["helptext"], config=new_config)
+            for item, options in items.items():
+                if item == "helptext":
+                    continue
+                if page_only and section != lookup:
+                    # Keep existing values for pages we are not updating
+                    new_opt = config.get(section, item)
+                    logger.debug("Retain existing value '%s' for %s",
+                                 new_opt, ".".join([section, item]))
+                else:
+                    # Get currently selected value
+                    key = category
+                    if section != "global":
+                        key += "|{}".format(section.replace(".", "|"))
+                    new_opt = self._config_cpanel_dict[key]["options"][item].get()
+                    logger.debug("Updating value to '%s' for %s",
+                                 new_opt, ".".join([section, item]))
+                helptext = config.format_help(options["helptext"], is_section=False)
+                new_config.set(section, helptext)
+                if options["type"] == list:  # Comma separated multi select options
+                    new_opt = ", ".join(new_opt if isinstance(new_opt, list) else new_opt.split())
+                new_config.set(section, item, str(new_opt))
+        config.config = new_config
         config.save_config()
         logger.info("Saved config: '%s'", config.configfile)
 
         if category == "gui":
-            if not get_config().tk_vars.running_task.get():
+            if not get_config().tk_vars["runningtask"].get():
                 get_config().root.rebuild()
             else:
                 logger.info("Can't redraw GUI whilst a task is running. GUI Settings will be "
@@ -813,8 +788,7 @@ class _Presets():
 
         args = ("save_filename", "json") if action == "save" else ("filename", "json")
         kwargs = dict(title=f"{action.title()} Preset...",
-                      initial_folder=self._preset_path,
-                      parent=self._parent)
+                      initial_folder=self._preset_path)
         if action == "save":
             kwargs["initial_file"] = self._get_initial_filename()
 

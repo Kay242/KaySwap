@@ -315,7 +315,7 @@ class _Options(ttk.Frame):  # pylint:disable=too-many-ancestors
         self._initialize_face_options()
         frame = ttk.Frame(self)
         frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        panels = {}
+        panels = dict()
         for name, editor in self._display_frame.editors.items():
             logger.debug("Initializing control panel for '%s' editor", name)
             controls = editor.controls
@@ -325,7 +325,7 @@ class _Options(ttk.Frame):  # pylint:disable=too-many-ancestors
                                  max_columns=1,
                                  header_text=controls["header"],
                                  blank_nones=False,
-                                 label_width=12,
+                                 label_width=18,
                                  style="CPanel",
                                  scrollbar=False)
             panel.pack_forget()
@@ -421,7 +421,7 @@ class TkGlobals():
         dict
             The variable name as key, the variable as value
         """
-        retval = {}
+        retval = dict()
         for name in ("frame_index", "transport_index", "face_index", "filter_distance"):
             var = tk.IntVar()
             var.set(10 if name == "filter_distance" else 0)
@@ -687,7 +687,7 @@ class Aligner():
         logger.debug("Launching aligner initialization thread")
         thread = MultiThread(self._init_aligner,
                              thread_count=1,
-                             name=f"{self.__class__.__name__}.init_aligner")
+                             name="{}.init_aligner".format(self.__class__.__name__))
         thread.start()
         logger.debug("Launched aligner initialization thread")
         return thread
@@ -705,8 +705,7 @@ class Aligner():
                                 ["components", "extended"],
                                 exclude_gpus=exclude_gpus,
                                 multiprocess=True,
-                                normalize_method="hist",
-                                disable_filter=True)
+                                normalize_method="hist")
             if plugin:
                 aligner.set_batchsize("align", 1)  # Set the batchsize to 1
             aligner.launch()
@@ -801,8 +800,7 @@ class Aligner():
         for plugin, aligner in self._aligners.items():
             if plugin == "mask":
                 continue
-            logger.debug("Setting to: '%s'", method)
-            aligner.aligner.set_normalize_method(method)
+            aligner.set_aligner_normalization_method(method)
 
 
 class FrameLoader():
@@ -854,7 +852,7 @@ class FrameLoader():
                              frames_location,
                              video_meta_data,
                              thread_count=1,
-                             name=f"{self.__class__.__name__}.init_frames")
+                             name="{}.init_frames".format(self.__class__.__name__))
         thread.start()
         return thread
 
