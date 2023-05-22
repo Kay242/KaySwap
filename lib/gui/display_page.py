@@ -25,7 +25,7 @@ class DisplayPage(ttk.Frame):  # pylint: disable=too-many-ancestors
         ttk.Frame.__init__(self, parent)
 
         self._parent = parent
-        self.running_task = parent.running_task
+        self.runningtask = parent.runningtask
         self.helptext = helptext
         self.tabname = tab_name
 
@@ -56,11 +56,12 @@ class DisplayPage(ttk.Frame):  # pylint: disable=too-many-ancestors
                 logger.debug("Adding: (%s: %s)", key, val)
                 self.vars[key] = val
 
-    def set_vars(self):
+    @staticmethod
+    def set_vars():
         """ Override to return a dict of page specific variables """
-        return {}
+        return dict()
 
-    def on_tab_select(self):
+    def on_tab_select(self):  # pylint:disable=no-self-use
         """ Override for specific actions when the current tab is selected """
         logger.debug("Returning as 'on_tab_select' not implemented for %s",
                      self.__class__.__name__)
@@ -150,7 +151,7 @@ class DisplayPage(ttk.Frame):  # pylint: disable=too-many-ancestors
 
     def subnotebook_get_titles_ids(self):
         """ Return tabs ids and titles """
-        tabs = {}
+        tabs = dict()
         for tab_id in range(0, self.subnotebook.index("end")):
             tabs[self.subnotebook.tab(tab_id, "text")] = tab_id
         logger.debug(tabs)
@@ -182,7 +183,8 @@ class DisplayOptionalPage(DisplayPage):  # pylint: disable=too-many-ancestors
         self.update_idletasks()
         self._update_page()
 
-    def set_vars(self):
+    @staticmethod
+    def set_vars():
         """ Analysis specific vars """
         enabled = tk.BooleanVar()
         enabled.set(True)
@@ -190,8 +192,12 @@ class DisplayOptionalPage(DisplayPage):  # pylint: disable=too-many-ancestors
         ready = tk.BooleanVar()
         ready.set(False)
 
+        modified = tk.DoubleVar()
+        modified.set(None)
+
         tk_vars = {"enabled": enabled,
-                   "ready": ready}
+                   "ready": ready,
+                   "modified": modified}
         logger.debug(tk_vars)
         return tk_vars
 
@@ -207,11 +213,11 @@ class DisplayOptionalPage(DisplayPage):  # pylint: disable=too-many-ancestors
     def set_info_text(self):
         """ Set waiting for display text """
         if not self.vars["enabled"].get():
-            msg = f"{self.tabname.title()} disabled"
+            msg = "{} disabled".format(self.tabname.title())
         elif self.vars["enabled"].get() and not self.vars["ready"].get():
-            msg = f"Waiting for {self.tabname}..."
+            msg = "Waiting for {}...".format(self.tabname)
         else:
-            msg = f"Displaying {self.tabname}"
+            msg = "Displaying {}".format(self.tabname)
         logger.debug(msg)
         self.set_info(msg)
 
@@ -229,7 +235,7 @@ class DisplayOptionalPage(DisplayPage):  # pylint: disable=too-many-ancestors
                              command=self.save_items)
         btnsave.pack(padx=2, side=tk.RIGHT)
         Tooltip(btnsave,
-                text=_(f"Save {self.tabname}(s) to file"),
+                text=_("Save {}(s) to file").format(self.tabname),
                 wrap_length=200)
 
     def add_option_enable(self):
@@ -237,11 +243,11 @@ class DisplayOptionalPage(DisplayPage):  # pylint: disable=too-many-ancestors
         logger.debug("Adding enable option")
         chkenable = ttk.Checkbutton(self.optsframe,
                                     variable=self.vars["enabled"],
-                                    text=f"Enable {self.tabname}",
+                                    text="Enable {}".format(self.tabname),
                                     command=self.on_chkenable_change)
         chkenable.pack(side=tk.RIGHT, padx=5, anchor=tk.W)
         Tooltip(chkenable,
-                text=_(f"Enable or disable {self.tabname} display"),
+                text=_("Enable or disable {} display").format(self.tabname),
                 wrap_length=200)
 
     def save_items(self):
@@ -259,7 +265,7 @@ class DisplayOptionalPage(DisplayPage):  # pylint: disable=too-many-ancestors
 
     def _update_page(self):
         """ Update the latest preview item """
-        if not self.running_task.get() or not self._tab_is_active:
+        if not self.runningtask.get() or not self._tab_is_active:
             return
         if self.vars["enabled"].get():
             logger.trace("Updating page: %s", self.__class__.__name__)

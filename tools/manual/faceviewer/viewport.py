@@ -39,8 +39,8 @@ class Viewport():
                                       nose=(27, 36),
                                       jaw=(0, 17),
                                       chin=(8, 11))
-        self._landmarks = {}
-        self._tk_faces = {}
+        self._landmarks = dict()
+        self._tk_faces = dict()
         self._objects = VisibleObjects(self)
         self._hoverbox = HoverBox(self)
         self._active_frame = ActiveFrame(self, tk_edited_variable)
@@ -128,15 +128,14 @@ class Viewport():
             return None
         if mask.stored_centering != "face":
             face = AlignedFace(detected_face.landmarks_xy)
-            mask.set_sub_crop(face.pose.offset[mask.stored_centering],
-                              face.pose.offset["face"],
+            mask.set_sub_crop(face.pose.offset["face"] - face.pose.offset[mask.stored_centering],
                               centering="face")
         return mask.mask.squeeze()
 
     def reset(self):
         """ Reset all the cached objects on a face size change. """
-        self._landmarks = {}
-        self._tk_faces = {}
+        self._landmarks = dict()
+        self._tk_faces = dict()
 
     def update(self, refresh_annotations=False):
         """ Update the viewport.
@@ -198,7 +197,7 @@ class Viewport():
 
     def _discard_tk_faces(self):
         """ Remove any :class:`TKFace` objects from the cache that are not currently displayed. """
-        keys = [f"{pnt_x}_{pnt_y}"
+        keys = ["{}_{}".format(pnt_x, pnt_y)
                 for pnt_x, pnt_y in self._objects.visible_grid[:2].T.reshape(-1, 2)]
         for key in list(self._tk_faces):
             if key not in keys:
@@ -303,7 +302,7 @@ class Viewport():
             (`polygon`, `line`). The value is a list containing the (x, y) coordinates of each
             part of the mesh annotation, from the top left corner location.
         """
-        key = f"{frame_index}_{face_index}"
+        key = "{}_{}".format(frame_index, face_index)
         landmarks = self._landmarks.get(key, None)
         if not landmarks or refresh:
             aligned = AlignedFace(face.landmarks_xy,
@@ -311,6 +310,7 @@ class Viewport():
                                   size=self.face_size)
             landmarks = dict(polygon=[], line=[])
             for area, val in self._landmark_mapping.items():
+                # pylint:disable=unsubscriptable-object
                 points = aligned.landmarks[val[0]:val[1]] + top_left
                 shape = "polygon" if area.endswith("eye") or area.startswith("mouth") else "line"
                 landmarks[shape].append(points)
@@ -843,13 +843,13 @@ class ActiveFrame():
         self._canvas.itemconfig("active_highlighter", state="hidden")
 
         for key in ("polygon", "line"):
-            tag = f"active_mesh_{key}"
+            tag = "active_mesh_{}".format(key)
             self._canvas.itemconfig(tag, **self._viewport.mesh_kwargs[key], width=1)
             self._canvas.dtag(tag)
 
         if self._viewport.selected_editor == "mask" and not self._optional_annotations["mask"]:
             for key, tk_face in self._tk_faces.items():
-                if key.startswith(f"{self._last_execution['frame_index']}_"):
+                if key.startswith("{}_".format(self._last_execution["frame_index"])):
                     tk_face.update_mask(None)
 
     def _set_active_objects(self):
@@ -985,16 +985,16 @@ class ActiveFrame():
 
         edited = (self._tk_vars["edited"].get() and
                   self._tk_vars["selected_editor"].get() not in ("Mask", "View"))
-        landmarks = self._viewport.get_landmarks(self.frame_index,
-                                                 face_index,
-                                                 detected_face,
-                                                 top_left,
-                                                 edited)
+        landmarks = self._viewport.extracted_landmarks(self.frame_index,
+                                                       face_index,
+                                                       detected_face,
+                                                       top_left,
+                                                       edited)
         for key, kwarg in kwargs.items():
             for idx, mesh_id in enumerate(mesh_ids[key]):
                 self._canvas.coords(mesh_id, *landmarks[key][idx].flatten())
                 self._canvas.itemconfig(mesh_id, state=state, **kwarg)
-                self._canvas.addtag_withtag(f"active_mesh_{key}", mesh_id)
+                self._canvas.addtag_withtag("active_mesh_{}".format(key), mesh_id)
 
 
 class TKFace():

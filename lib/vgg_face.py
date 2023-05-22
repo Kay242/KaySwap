@@ -7,6 +7,8 @@ https://creativecommons.org/licenses/by-nc/4.0/
 """
 
 import logging
+import sys
+import os
 
 import cv2
 import numpy as np
@@ -35,7 +37,9 @@ class VGGFace():
     # <<< GET MODEL >>> #
     def get_model(self, git_model_id, model_filename, backend):
         """ Check if model is available, if not, download and unzip it """
-        model = GetModel(model_filename, git_model_id).model_path
+        root_path = os.path.abspath(os.path.dirname(sys.argv[0]))
+        cache_path = os.path.join(root_path, "plugins", "extract", "recognition", ".cache")
+        model = GetModel(model_filename, cache_path, git_model_id).model_path
         model = cv2.dnn.readNetFromCaffe(model[1], model[0])
         model.setPreferableTarget(self.get_backend(backend))
         return model
@@ -46,7 +50,7 @@ class VGGFace():
         if backend == "OPENCL":
             logger.info("Using OpenCL backend. If the process runs, you can safely ignore any of "
                         "the failure messages.")
-        retval = getattr(cv2.dnn, f"DNN_TARGET_{backend}")
+        retval = getattr(cv2.dnn, "DNN_TARGET_{}".format(backend))
         return retval
 
     def predict(self, face):

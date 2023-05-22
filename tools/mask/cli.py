@@ -23,20 +23,17 @@ class MaskArgs(FaceSwapArgs):
         """ Return command information """
         return _("Mask tool\nGenerate masks for existing alignments files.")
 
-    @staticmethod
-    def get_argument_list():
-        argument_list = []
+    def get_argument_list(self):
+        argument_list = list()
         argument_list.append(dict(
             opts=("-a", "--alignments"),
             action=FileFullPaths,
             type=str,
             group=_("data"),
-            required=False,
+            required=True,
             filetypes="alignments",
-            help=_("Full path to the alignments file to add the mask to if not at the default "
-                   "location. NB: If the input-type is faces and you wish to update the "
-                   "corresponding alignments file, then you must provide a value here as the "
-                   "location cannot be automatically detected.")))
+            help=_("Full path to the alignments file to add the mask to. NB: if the mask already "
+                   "exists in the alignments file it will be overwritten.")))
         argument_list.append(dict(
             opts=("-i", "--input"),
             action=DirOrFileFullPaths,
@@ -57,22 +54,6 @@ class MaskArgs(FaceSwapArgs):
                    "\nL|faces: The input is a folder containing extracted faces."
                    "\nL|frames: The input is a folder containing frames or is a video")))
         argument_list.append(dict(
-            opts=("-B", "--batch-mode"),
-            action="store_true",
-            dest="batch_mode",
-            default=False,
-            group=_("data"),
-            help=_("R|Run the mask tool on multiple sources. If selected then the other options "
-                   "should be set as follows:"
-                   "\nL|input: A parent folder containing either all of the video files to be "
-                   "processed, or containing sub-folders of frames/faces."
-                   "\nL|output-folder: If provided, then sub-folders will be created within the "
-                   "given location to hold the previews for each input."
-                   "\nL|alignments: Alignments field will be ignored for batch processing. The "
-                   "alignments files must exist at the default location (for frames). For batch "
-                   "processing of masks with 'faces' as the input type, then only the PNG header "
-                   "within the extracted faces will be updated.")))
-        argument_list.append(dict(
             opts=("-M", "--masker"),
             action=Radio,
             type=str.lower,
@@ -86,10 +67,6 @@ class MaskArgs(FaceSwapArgs):
                    "\nL|components: Mask designed to provide facial segmentation based on the "
                    "positioning of landmark locations. A convex hull is constructed around the "
                    "exterior of the landmarks to create a mask."
-                   "\nL|custom: A dummy mask that fills the mask area with all 1s or 0s "
-                   "(configurable in settings). This is only required if you intend to manually "
-                   "edit the custom masks yourself in the manual tool. This mask does not use the "
-                   "GPU."
                    "\nL|extended: Mask designed to provide facial segmentation based on the "
                    "positioning of landmark locations. A convex hull is constructed around the "
                    "exterior of the landmarks and the mask is extended upwards onto the forehead."
